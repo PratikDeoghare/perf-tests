@@ -399,7 +399,7 @@ func executeTests(c *kubernetes.Clientset) bool {
 		fmt.Println("Orchestrator Pod is", orchestratorPodName)
 
 		// The pods orchestrate themselves, we just wait for the results file to show up in the orchestrator container
-		for true {
+		for {
 			// Monitor the orchestrator pod for the CSV results file
 			csvdata := getCsvResultsFromPod(c, orchestratorPodName)
 			if csvdata == nil {

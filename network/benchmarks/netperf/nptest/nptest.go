@@ -71,6 +71,7 @@ const (
 	workerMode           = "worker"
 	orchestratorMode     = "orchestrator"
 	iperf3Path           = "/usr/local/bin/iperf3"
+	qperfPath            = "/usr/local/bin/qperf"
 	netperfPath          = "/usr/local/bin/netperf"
 	netperfServerPath    = "/usr/local/bin/netserver"
 	outputCaptureFile    = "/tmp/output.txt"
@@ -83,10 +84,11 @@ const (
 )
 
 const (
-	iperfTCPTest  = iota
-	iperfUDPTest  = iota
-	iperfSctpTest = iota
-	netperfTest   = iota
+	iperfTCPTest = iota
+	qperfTCPTest
+	iperfUDPTest
+	iperfSctpTest
+	netperfTest
 )
 
 // NetPerfRPC service that exposes RegisterClient and ReceiveOutput for clients
@@ -158,11 +160,18 @@ func init() {
 
 	workerStateMap = make(map[string]*workerState)
 	testcases = []*testcase{
+		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "1 qperf TCP. Same VM using Pod IP", Type: qperfTCPTest, ClusterIP: false, MSS: mssMin},
+		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "2 qperf TCP. Same VM using Virtual IP", Type: qperfTCPTest, ClusterIP: true, MSS: mssMin},
+		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "3 qperf TCP. Remote VM using Pod IP", Type: qperfTCPTest, ClusterIP: false, MSS: mssMin},
+		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "4 qperf TCP. Remote VM using Virtual IP", Type: qperfTCPTest, ClusterIP: true, MSS: mssMin},
+		{SourceNode: "netperf-w2", DestinationNode: "netperf-w2", Label: "5 qperf TCP. Hairpin Pod to own Virtual IP", Type: qperfTCPTest, ClusterIP: true, MSS: mssMin},
+
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "1 iperf TCP. Same VM using Pod IP", Type: iperfTCPTest, ClusterIP: false, MSS: mssMin},
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "2 iperf TCP. Same VM using Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "3 iperf TCP. Remote VM using Pod IP", Type: iperfTCPTest, ClusterIP: false, MSS: mssMin},
 		{SourceNode: "netperf-w3", DestinationNode: "netperf-w2", Label: "4 iperf TCP. Remote VM using Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
 		{SourceNode: "netperf-w2", DestinationNode: "netperf-w2", Label: "5 iperf TCP. Hairpin Pod to own Virtual IP", Type: iperfTCPTest, ClusterIP: true, MSS: mssMin},
+
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "6 iperf SCTP. Same VM using Pod IP", Type: iperfSctpTest, ClusterIP: false, MSS: mssMin},
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w2", Label: "7 iperf SCTP. Same VM using Virtual IP", Type: iperfSctpTest, ClusterIP: true, MSS: mssMin},
 		{SourceNode: "netperf-w1", DestinationNode: "netperf-w3", Label: "8 iperf SCTP. Remote VM using Pod IP", Type: iperfSctpTest, ClusterIP: false, MSS: mssMin},
@@ -290,7 +299,7 @@ func allocateWorkToClient(workerS *workerState, reply *WorkItem) {
 		}
 
 		switch {
-		case v.Type == iperfTCPTest || v.Type == iperfUDPTest || v.Type == iperfSctpTest:
+		case v.Type == iperfTCPTest || v.Type == iperfUDPTest || v.Type == iperfSctpTest || v.Type == qperfTCPTest:
 			reply.ClientItem.Port = "5201"
 			reply.ClientItem.MSS = v.MSS
 
@@ -412,6 +421,16 @@ func parseIperfTCPBandwidth(output string) string {
 	return "0"
 }
 
+func parseQperfTCPLatency(output string) string {
+	return output
+	//// Parses the output of iperf3 and grabs the group Mbits/sec from the output
+	//match := iperfTCPOutputRegexp.FindStringSubmatch(output)
+	//if match != nil && len(match) > 1 {
+	//	return match[1]
+	//}
+	//return "0"
+}
+
 func parseIperfSctpBandwidth(output string) string {
 	// Parses the output of iperf3 and grabs the group Mbits/sec from the output
 	match := iperfSCTPOutputRegexp.FindStringSubmatch(output)
@@ -470,6 +489,15 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, reply *int) error {
 		cpuSender, cpuReceiver = parseIperfCPUUsage(data.Output)
 		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
 
+	case qperfTCPTest:
+		mss := testcases[currentJobIndex].MSS - mssStepSize
+		outputLog = outputLog + fmt.Sprintln("Received TCP output from worker", data.Worker, "for test", testcase.Label,
+			"from", testcase.SourceNode, "to", testcase.DestinationNode, "MSS:", mss) + data.Output
+		writeOutputFile(outputCaptureFile, outputLog)
+		bw = parseQperfTCPLatency(data.Output)
+		cpuSender, cpuReceiver = "na", "na" // parseIperfCPUUsage(data.Output)
+		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
+
 	case iperfSctpTest:
 		mss := testcases[currentJobIndex].MSS - mssStepSize
 		outputLog = outputLog + fmt.Sprintln("Received SCTP output from worker", data.Worker, "for test", testcase.Label,
@@ -500,6 +528,8 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, reply *int) error {
 	switch data.Type {
 	case iperfTCPTest, iperfSctpTest:
 		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec. CPU usage sender was", cpuSender, "%. CPU usage receiver was", cpuReceiver, "%.")
+	case qperfTCPTest:
+		fmt.Println("Jobdone from worker QPERF", data.Worker, "Bandwidth was", bw, "Mbits/sec. CPU usage sender was", cpuSender, "%. CPU usage receiver was", cpuReceiver, "%.")
 	default:
 		fmt.Println("Jobdone from worker", data.Worker, "Bandwidth was", bw, "Mbits/sec")
 	}
@@ -565,6 +595,13 @@ func handleClientWorkItem(client *rpc.Client, workItem *WorkItem) {
 		if err != nil {
 			log.Fatal("failed to call client", err)
 		}
+	case workItem.ClientItem.Type == qperfTCPTest:
+		outputString := qperfClient(workItem.ClientItem.Host, workItem.ClientItem.Type)
+		var reply int
+		err := client.Call("NetPerfRPC.ReceiveOutput", WorkerOutput{Output: outputString, Worker: worker, Type: workItem.ClientItem.Type}, &reply)
+		if err != nil {
+			log.Fatal("failed to call client", err)
+		}
 	case workItem.ClientItem.Type == netperfTest:
 		outputString := netperfClient(workItem.ClientItem.Host, workItem.ClientItem.Port, workItem.ClientItem.Type)
 		var reply int
@@ -624,6 +661,7 @@ func startWork() {
 			case workItem.IsServerItem == true:
 				fmt.Println("Orchestrator requests worker run iperf and netperf servers")
 				go iperfServer()
+				go qperfServer()
 				go netperfServer()
 				time.Sleep(1 * time.Second)
 
@@ -637,6 +675,14 @@ func startWork() {
 // Invoke and indefinitely run an iperf server
 func iperfServer() {
 	output, success := cmdExec(iperf3Path, []string{iperf3Path, "-s", host, "-J", "-i", "60"}, 15)
+	if success {
+		fmt.Println(output)
+	}
+}
+
+// Invoke and indefinitely run an qperf server
+func qperfServer() {
+	output, success := cmdExec(qperfPath, []string{qperfPath}, 15)
 	if success {
 		fmt.Println(output)
 	}
@@ -670,6 +716,22 @@ func iperfClient(serverHost, serverPort string, mss int, workItemType int) (rv s
 		if success {
 			rv = output
 		}
+	}
+	return
+}
+
+// Invoke and run an qperf client and return the output if successful.
+func qperfClient(serverHost string, workItemType int) (rv string) {
+	switch {
+	case workItemType == qperfTCPTest:
+		output, success := cmdExec(qperfPath, []string{
+			qperfPath, "-ip", "19766", serverHost, "tcp_lat",
+		}, 15)
+		if success {
+			rv = output
+		}
+	default:
+		panic(workItemType)
 	}
 	return
 }
