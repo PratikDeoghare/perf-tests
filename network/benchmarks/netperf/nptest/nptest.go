@@ -299,7 +299,7 @@ func allocateWorkToClient(workerS *workerState, reply *WorkItem) {
 		}
 
 		switch {
-		case v.Type == iperfTCPTest || v.Type == iperfUDPTest || v.Type == iperfSctpTest || v.Type == qperfTCPTest:
+		case v.Type == iperfTCPTest || v.Type == iperfUDPTest || v.Type == iperfSctpTest:
 			reply.ClientItem.Port = "5201"
 			reply.ClientItem.MSS = v.MSS
 
@@ -308,7 +308,8 @@ func allocateWorkToClient(workerS *workerState, reply *WorkItem) {
 				v.Finished = true
 			}
 			return
-
+		case v.Type == qperfTCPTest:
+			return
 		case v.Type == netperfTest:
 			reply.ClientItem.Port = "12865"
 			return
@@ -497,6 +498,7 @@ func (t *NetPerfRPC) ReceiveOutput(data *WorkerOutput, reply *int) error {
 		bw = parseQperfTCPLatency(data.Output)
 		cpuSender, cpuReceiver = "na", "na" // parseIperfCPUUsage(data.Output)
 		registerDataPoint(testcase.Label, mss, bw, currentJobIndex)
+		testcases[currentJobIndex].Finished = true
 
 	case iperfSctpTest:
 		mss := testcases[currentJobIndex].MSS - mssStepSize
@@ -725,7 +727,7 @@ func qperfClient(serverHost string, workItemType int) (rv string) {
 	switch {
 	case workItemType == qperfTCPTest:
 		output, success := cmdExec(qperfPath, []string{
-			qperfPath, "-ip", "19766", serverHost, "tcp_lat",
+			qperfPath, "-ip", "19766", serverHost, "tcp_bw", "tcp_lat",
 		}, 15)
 		if success {
 			rv = output
